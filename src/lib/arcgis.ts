@@ -14,6 +14,15 @@ import { config } from "@/lib/config";
 
 let cachedToken: { token: string; expires: number } | null = null;
 
+/** An error returned by ArcGIS REST, carrying its logical error `code` (e.g. 403
+ *  permission denied, 498/499 token problems) so callers can map it to HTTP. */
+export class ArcgisError extends Error {
+  constructor(message: string, public code?: number) {
+    super(message);
+    this.name = "ArcgisError";
+  }
+}
+
 async function postForm(url: string, params: Record<string, string>): Promise<any> {
   const res = await fetch(url, {
     method: "POST",
@@ -28,7 +37,7 @@ async function postForm(url: string, params: Record<string, string>): Promise<an
     throw new Error(`Non-JSON from ${url} (HTTP ${res.status}): ${text.slice(0, 300)}`);
   }
   if (json && json.error) {
-    throw new Error(`ArcGIS error from ${url}: ${JSON.stringify(json.error)}`);
+    throw new ArcgisError(`ArcGIS error from ${url}: ${JSON.stringify(json.error)}`, Number(json.error.code) || undefined);
   }
   return json;
 }
@@ -61,12 +70,17 @@ export interface QueryOptions {
   outStatistics?: unknown;
 }
 
-/** Query a layer/table and return the raw feature attribute objects. */
+/**
+ * Query a layer/table and return the raw feature attribute objects. Pass `asToken`
+ * to run the query under a specific identity (the ops console passes the signed-in
+ * operator's token so portal access control applies); omit it to use the admin token.
+ */
 export async function queryLayer<T = Record<string, any>>(
   layerUrl: string,
-  opts: QueryOptions = {}
+  opts: QueryOptions = {},
+  asToken?: string
 ): Promise<T[]> {
-  const token = await getAdminToken();
+  const token = asToken || (await getAdminToken());
   const params: Record<string, string> = {
     f: "json",
     token,
@@ -82,9 +96,9 @@ export async function queryLayer<T = Record<string, any>>(
   return (json.features || []).map((f: any) => f.attributes as T);
 }
 
-/** Count matching rows without pulling them. */
-export async function countLayer(layerUrl: string, where = "1=1"): Promise<number> {
-  const token = await getAdminToken();
+/** Count matching rows without pulling them. `asToken` runs it as that identity. */
+export async function countLayer(layerUrl: string, where = "1=1", asToken?: string): Promise<number> {
+  const token = asToken || (await getAdminToken());
   const json = await postForm(`${layerUrl}/query`, {
     f: "json",
     token,
@@ -100,16 +114,18 @@ export interface ApplyEditsResult {
   deleteResults?: Array<{ objectId: number; success: boolean; error?: unknown }>;
 }
 
-/** applyEdits with admin token. Features may carry an optional point `geometry`. */
+/** applyEdits (optionally as a given identity via `asToken`; defaults to admin).
+ *  Features may carry an optional point `geometry`. */
 export async function applyEdits(
   layerUrl: string,
   edits: {
     adds?: Array<{ attributes: Record<string, any>; geometry?: Record<string, any> }>;
     updates?: Array<{ attributes: Record<string, any>; geometry?: Record<string, any> }>;
     deletes?: number[];
-  }
+  },
+  asToken?: string
 ): Promise<ApplyEditsResult> {
-  const token = await getAdminToken();
+  const token = asToken || (await getAdminToken());
   const params: Record<string, string> = { f: "json", token, rollbackOnFailure: "true" };
   if (edits.adds) params.adds = JSON.stringify(edits.adds);
   if (edits.updates) params.updates = JSON.stringify(edits.updates);
@@ -128,10 +144,11 @@ export async function applyEdits(
 export async function insertOne(
   layerUrl: string,
   attributes: Record<string, any>,
-  geometry?: Record<string, any>
+  geometry?: Record<string, any>,
+  asToken?: string
 ): Promise<number> {
   const add = geometry ? { attributes, geometry } : { attributes };
-  const res = await applyEdits(layerUrl, { adds: [add] });
+  const res = await applyEdits(layerUrl, { adds: [add] }, asToken);
   const oid = res.addResults?.[0]?.objectId;
   if (oid == null) throw new Error("insert returned no objectId");
   return oid;

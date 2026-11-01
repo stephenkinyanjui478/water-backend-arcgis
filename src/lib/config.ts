@@ -28,9 +28,44 @@ export const config = {
     incidenceTypes: `${HOSTED}/Water_IncidenceTypes/FeatureServer/0`,
     fieldWorkers: `${HOSTED}/Water_FieldWorkers/FeatureServer/0`,
     serviceConnections: `${HOSTED}/WSP_UtilityNetwork/FeatureServer/1`,
+    // Additional hosted layers/tables the operations console reads + edits.
+    billingCycles: `${HOSTED}/Water_Billing_Cycles/FeatureServer/0`,
+    tariffs: `${HOSTED}/Water_Tariffs/FeatureServer/0`,
+    workOrderTypes: `${HOSTED}/Water_WorkOrderTypes/FeatureServer/0`,
+    orgSettings: `${HOSTED}/Water_OrgSettings/FeatureServer/0`,
+    orgMembers: `${HOSTED}/Water_OrgMembers/FeatureServer/0`,
+    maintenanceWorkOrders: `${HOSTED}/Water_MaintenanceWorkOrders/FeatureServer/0`,
+    meterReadWorkOrders: `${HOSTED}/Water_MeterReadWorkOrders/FeatureServer/0`,
     // PRIVATE tables — owner-only, backend admin-token access exclusively.
     customerAuth: process.env.CUSTOMER_AUTH_URL || `${HOSTED}/Water_CustomerAuth/FeatureServer/0`,
     mpesaTxn: process.env.MPESA_TXN_URL || `${HOSTED}/Water_MpesaTransactions/FeatureServer/0`,
+    // PRIVATE single-row table holding the SECRET communication credentials
+    // (SMS/Email/M-Pesa) managed from the admin client's Organization page.
+    orgSettingsSecure: process.env.ORG_SETTINGS_SECURE_URL || `${HOSTED}/Water_OrgSettings_Secure/FeatureServer/0`,
+  },
+
+  /** Admin console (the static WSP client) sign-in. */
+  admin: {
+    password: process.env.ADMIN_PASSWORD || "",
+  },
+
+  /**
+   * Operations console — the OAuth-gated React front-end (operations-console/).
+   * Uses the registered ArcGIS portal app (authorization-code flow) to sign the
+   * operator in against the esriea portal; the backend exchanges the code with the
+   * client secret and issues an httpOnly ops session. The redirect URI must be
+   * registered on the OAuth app.
+   */
+  ops: {
+    clientId: process.env.OPS_OAUTH_CLIENT_ID || process.env.ARCGIS_CLIENT_ID || "",
+    clientSecret: process.env.OPS_OAUTH_CLIENT_SECRET || process.env.ARCGIS_CLIENT_SECRET || "",
+    redirectUri: process.env.OPS_OAUTH_REDIRECT_URI || "http://localhost:4000/api/ops/oauth/callback",
+    consoleUrl: (process.env.OPS_CONSOLE_URL || "http://localhost:3100").replace(/\/+$/, ""),
+    // Entry gate: only portal members of this group may sign in. Prefer the
+    // stable group id; the title is a convenience fallback. If both are empty,
+    // any authenticated portal user is allowed (see isOpsMember).
+    requiredGroupId: process.env.OPS_REQUIRED_GROUP_ID || "",
+    requiredGroup: process.env.OPS_REQUIRED_GROUP || "",
   },
 
   jwt: {
@@ -56,6 +91,24 @@ export const config = {
     callbackUrl: process.env.MPESA_CALLBACK_URL || "",
     // CustomerPayBillOnline (paybill) or CustomerBuyGoodsOnline (till).
     transactionType: process.env.MPESA_TRANSACTION_TYPE || "CustomerPayBillOnline",
+  },
+
+  // SMS (Africastalking) + Email (SMTP) env DEFAULTS. These are overridden at
+  // runtime by whatever is saved in the private Water_OrgSettings_Secure table
+  // (see settings-store.ts) — the env values are just the fallback.
+  sms: {
+    username: process.env.SMS_USERNAME || "",
+    apiKey: process.env.SMS_API_KEY || "",
+    senderId: process.env.SMS_SENDER_ID || "",
+  },
+
+  smtp: {
+    host: process.env.SMTP_HOST || "",
+    port: Number(process.env.SMTP_PORT || 0) || null,
+    secure: /^(1|true|yes)$/i.test(process.env.SMTP_SECURE || ""),
+    user: process.env.SMTP_USER || "",
+    pass: process.env.SMTP_PASS || "",
+    from: process.env.SMTP_FROM || "",
   },
 };
 

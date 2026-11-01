@@ -1,17 +1,32 @@
 /**
  * Safaricom Daraja (M-Pesa) client — OAuth, Lipa na M-Pesa Online STK Push, and
  * the STK Push status query. Production by default; set MPESA_ENV=sandbox to point
- * at the sandbox host. All credentials come from env (see assertMpesaConfig).
+ * at the sandbox host. Credentials come from the settings store (admin
+ * Organization page) with env fallback — see getEffectiveMpesa / assertMpesa.
  */
-import { config, assertMpesaConfig } from "@/lib/config";
+import { getEffectiveMpesa } from "@/lib/settings-store";
 
 const HOSTS = {
   production: "https://api.safaricom.co.ke",
   sandbox: "https://sandbox.safaricom.co.ke",
 };
 
-function baseUrl(): string {
-  return config.mpesa.env === "sandbox" ? HOSTS.sandbox : HOSTS.production;
+/** The merged M-Pesa config (saved Daraja settings over env defaults). */
+type Mpesa = Awaited<ReturnType<typeof getEffectiveMpesa>>;
+
+function baseUrl(m: Mpesa): string {
+  return m.env === "sandbox" ? HOSTS.sandbox : HOSTS.production;
+}
+
+/** Validate that the effective M-Pesa config has everything STK Push needs. */
+function assertMpesa(m: Mpesa): void {
+  const missing: string[] = [];
+  if (!m.consumerKey) missing.push("consumer key");
+  if (!m.consumerSecret) missing.push("consumer secret");
+  if (!m.shortcode) missing.push("shortcode");
+  if (!m.passkey) missing.push("passkey");
+  if (!m.callbackUrl) missing.push("callback URL");
+  if (missing.length) throw new Error(`M-Pesa is not configured (missing: ${missing.join(", ")}).`);
 }
 
 /** Daraja timestamp: YYYYMMDDHHmmss in EAT (server local may differ — build from parts). */
@@ -28,8 +43,8 @@ export function darajaTimestamp(d = new Date()): string {
 }
 
 /** Lipa na M-Pesa password = base64(shortcode + passkey + timestamp). */
-function stkPassword(timestamp: string): string {
-  const raw = `${config.mpesa.shortcode}${config.mpesa.passkey}${timestamp}`;
+function stkPassword(m: Mpesa, timestamp: string): string {
+  const raw = `${m.shortcode}${m.passkey}${timestamp}`;
   return Buffer.from(raw).toString("base64");
 }
 
@@ -48,21 +63,23 @@ export function isValidMsisdn(phone: string): boolean {
   return /^254(7|1)\d{8}$/.test(normalizeMsisdn(phone));
 }
 
-let tokenCache: { token: string; expires: number } | null = null;
+let tokenCache: { token: string; expires: number; key: string } | null = null;
 
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(m: Mpesa): Promise<string> {
   const now = Date.now();
-  if (tokenCache && tokenCache.expires - 60_000 > now) return tokenCache.token;
+  // Key the cache on the credentials so a settings change invalidates it.
+  const key = `${m.env}:${m.consumerKey}`;
+  if (tokenCache && tokenCache.key === key && tokenCache.expires - 60_000 > now) return tokenCache.token;
 
-  const auth = Buffer.from(`${config.mpesa.consumerKey}:${config.mpesa.consumerSecret}`).toString("base64");
-  const res = await fetch(`${baseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
+  const auth = Buffer.from(`${m.consumerKey}:${m.consumerSecret}`).toString("base64");
+  const res = await fetch(`${baseUrl(m)}/oauth/v1/generate?grant_type=client_credentials`, {
     headers: { Authorization: `Basic ${auth}` },
   });
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok || !json.access_token) {
     throw new Error(`Daraja OAuth failed (HTTP ${res.status}): ${JSON.stringify(json)}`);
   }
-  tokenCache = { token: json.access_token, expires: now + Number(json.expires_in || 3599) * 1000 };
+  tokenCache = { token: json.access_token, expires: now + Number(json.expires_in || 3599) * 1000, key };
   return tokenCache.token;
 }
 
@@ -86,23 +103,24 @@ export interface StkPushResult {
 
 /** Initiate an STK push. Throws if Daraja rejects the request synchronously. */
 export async function stkPush(params: StkPushParams): Promise<StkPushResult> {
-  assertMpesaConfig();
-  const token = await getAccessToken();
+  const m = await getEffectiveMpesa();
+  assertMpesa(m);
+  const token = await getAccessToken(m);
   const timestamp = darajaTimestamp();
   const body = {
-    BusinessShortCode: config.mpesa.shortcode,
-    Password: stkPassword(timestamp),
+    BusinessShortCode: m.shortcode,
+    Password: stkPassword(m, timestamp),
     Timestamp: timestamp,
-    TransactionType: config.mpesa.transactionType,
+    TransactionType: m.transactionType,
     Amount: Math.round(params.amount),
     PartyA: normalizeMsisdn(params.phone),
-    PartyB: config.mpesa.shortcode,
+    PartyB: m.shortcode,
     PhoneNumber: normalizeMsisdn(params.phone),
-    CallBackURL: config.mpesa.callbackUrl,
+    CallBackURL: m.callbackUrl,
     AccountReference: params.accountReference.slice(0, 12),
     TransactionDesc: params.transactionDesc.slice(0, 13),
   };
-  const res = await fetch(`${baseUrl()}/mpesa/stkpush/v1/processrequest`, {
+  const res = await fetch(`${baseUrl(m)}/mpesa/stkpush/v1/processrequest`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -124,15 +142,16 @@ export interface StkQueryResult {
 
 /** Query the status of a prior STK push (used for polling fallback to the callback). */
 export async function stkQuery(checkoutRequestId: string): Promise<StkQueryResult> {
-  assertMpesaConfig();
-  const token = await getAccessToken();
+  const m = await getEffectiveMpesa();
+  assertMpesa(m);
+  const token = await getAccessToken(m);
   const timestamp = darajaTimestamp();
-  const res = await fetch(`${baseUrl()}/mpesa/stkpushquery/v1/query`, {
+  const res = await fetch(`${baseUrl(m)}/mpesa/stkpushquery/v1/query`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      BusinessShortCode: config.mpesa.shortcode,
-      Password: stkPassword(timestamp),
+      BusinessShortCode: m.shortcode,
+      Password: stkPassword(m, timestamp),
       Timestamp: timestamp,
       CheckoutRequestID: checkoutRequestId,
     }),
