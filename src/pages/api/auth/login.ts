@@ -19,5 +19,8 @@ export default withApi(async (req: NextApiRequest, res: NextApiResponse) => {
 
   await touchLastLogin(row.objectid);
   const token = signSession({ sub: row.email, email: row.email, name: row.full_name || undefined });
-  res.status(200).json({ token, user: { email: row.email, name: row.full_name, phone: row.phone } });
+  res.status(200).json({
+    token,
+    user: { email: row.email, name: row.full_name, phone: row.phone, mustReset: row.must_reset === 1 },
+  });
 });

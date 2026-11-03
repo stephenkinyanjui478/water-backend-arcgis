@@ -31,9 +31,9 @@ const L = config.layers;
 export const RESOURCES: Record<string, ResourceDef> = {
   customers: {
     layerUrl: L.customers,
-    outFields: "objectid,account_no,cust_name,phone,email,status,balance",
+    outFields: "objectid,cust_name,phone,email,balance,num_connections",
     orderBy: "cust_name ASC",
-    writeFields: ["account_no", "cust_name", "phone", "email", "status", "balance"],
+    writeFields: ["cust_name", "phone", "email", "balance", "num_connections"],
   },
   "billing-cycles": {
     layerUrl: L.billingCycles,
@@ -80,19 +80,14 @@ export const RESOURCES: Record<string, ResourceDef> = {
     orderBy: "type_name ASC",
     writeFields: ["type_name", "description"],
   },
-  "org-settings": {
-    layerUrl: L.orgSettings,
-    outFields: "*",
-    writeFields: [
-      "org_name", "contact_email", "website", "contact_phone", "whatsapp",
-      "emergency_phone", "address_line1", "address_line2", "logo",
-    ],
-  },
+  // NOTE: "org-settings" was retired — the Organization profile now lives in the
+  // consolidated PRIVATE Water_Organization table, served by /api/ops/organization
+  // (never through this generic passthrough, which would leak the secret columns).
   tariffs: {
     layerUrl: L.tariffs,
-    outFields: "objectid,tariff_name,category,rate,min_charge,description,active",
+    outFields: "objectid,tariff_name,category,rate,min_charge,description",
     orderBy: "tariff_name ASC",
-    writeFields: ["tariff_name", "category", "rate", "min_charge", "description", "active"],
+    writeFields: ["tariff_name", "category", "rate", "min_charge", "description"],
   },
 
   /* ---- Map pages: stats + data-table queries route through here; the map's
@@ -138,6 +133,27 @@ export const RESOURCES: Record<string, ResourceDef> = {
     outFields: "objectid,meter_no,cycle_name,esritask_assignee,esritask_duedate,esritask_notes,esritask_status,esritask_priority",
     orderBy: "esritask_duedate ASC",
     writeFields: ["meter_no", "cycle_name", "esritask_assignee", "esritask_duedate", "esritask_notes", "esritask_status", "esritask_priority"],
+  },
+
+  /* ---- Zoning ---- */
+  // Zone polygons (the utility-network "Zones" layer). Read-only here — zones are
+  // drawn/edited in the utility-network editor. The Zoning page reads the list from
+  // here and renders the polygon on its own map directly from the hosted service.
+  zones: {
+    layerUrl: L.zones,
+    outFields: "objectid,name,dma,status",
+    orderBy: "name ASC",
+    writeFields: [],
+    noCreate: true,
+    noDelete: true,
+  },
+  // Operator-entered supply per zone (keyed by the zone's dma/name string). Each
+  // record covers a supply period: supply_date = period start, period_end = end.
+  "zone-supply": {
+    layerUrl: L.zoneSupply,
+    outFields: "objectid,zone,supply_date,period_end,supply_m3,notes",
+    orderBy: "supply_date DESC",
+    writeFields: ["zone", "supply_date", "period_end", "supply_m3", "notes"],
   },
 };
 

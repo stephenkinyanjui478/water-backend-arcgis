@@ -24,6 +24,23 @@ The `pages/api` directory is mapped to `/api/*`. Files in this directory are tre
 
 This project uses [`next/font`](https://nextjs.org/docs/pages/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Background jobs (Inngest)
+
+The Bulk SMS page's **Resend** and **Delete** actions are queued as Inngest events
+(`sms/resend.requested`, `sms/delete.requested`) and run by functions in
+`src/inngest/functions.ts`, served at `/api/inngest`.
+
+For these to execute locally, run the Inngest dev server alongside `npm run dev`:
+
+```bash
+npx inngest-cli@latest dev -u http://localhost:4000/api/inngest
+```
+
+`INNGEST_DEV=1` must be set (see `.env.example`) so the serve endpoint runs in dev
+mode without a signing key. In production, set `INNGEST_SIGNING_KEY` instead and
+leave `INNGEST_DEV` unset. Verify registration at `GET /api/inngest` — it should
+report `"mode":"dev"` and `"function_count":2`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

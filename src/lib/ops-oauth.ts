@@ -110,27 +110,3 @@ export async function fetchSelf(token: string): Promise<SelfInfo> {
     privileges: Array.isArray(json.privileges) ? json.privileges : [],
   };
 }
-
-/**
- * Entry gate (Decision 1): is this portal member allowed into the ops console?
- * Access is administered in the portal by membership of a configured group
- * (by id, preferred, or title). If neither OPS_REQUIRED_GROUP_ID nor
- * OPS_REQUIRED_GROUP is set, every authenticated portal user is allowed in
- * (dev fallback) — a warning is logged once so this isn't silently permissive.
- */
-let warnedNoGroup = false;
-export function isOpsMember(self: SelfInfo): boolean {
-  const { requiredGroupId, requiredGroup } = config.ops;
-  if (!requiredGroupId && !requiredGroup) {
-    if (!warnedNoGroup) {
-      console.warn(
-        "[ops] No OPS_REQUIRED_GROUP_ID / OPS_REQUIRED_GROUP set — every authenticated portal user can sign in."
-      );
-      warnedNoGroup = true;
-    }
-    return true;
-  }
-  return self.groups.some(
-    (g) => (requiredGroupId && g.id === requiredGroupId) || (requiredGroup && g.title === requiredGroup)
-  );
-}

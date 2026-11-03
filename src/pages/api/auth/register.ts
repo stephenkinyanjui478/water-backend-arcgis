@@ -32,5 +32,5 @@ export default withApi(async (req: NextApiRequest, res: NextApiResponse) => {
   });
 
   const token = signSession({ sub: row.email, email: row.email, name: row.full_name || undefined });
-  res.status(201).json({ token, user: { email: row.email, name: row.full_name, phone: row.phone } });
+  res.status(201).json({ token, user: { email: row.email, name: row.full_name, phone: row.phone, mustReset: false } });
 });

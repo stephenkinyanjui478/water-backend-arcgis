@@ -4,6 +4,7 @@
  * here; plain passwords never leave the request handler.
  */
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { config } from "@/lib/config";
 import {
   queryLayer,
@@ -24,14 +25,64 @@ export interface AuthRow {
   full_name: string | null;
   phone: string | null;
   status: string | null;
+  /** 1 ⇒ the customer must change their (temporary) password before using the app. */
+  must_reset: number | null;
+}
+
+/** Mirror a customer's editable contact fields onto their login row, located by
+ *  their CURRENT (pre-edit) email. No-op if they have no login. Used when a
+ *  customer is edited in the operations console so name/phone/email stay in sync
+ *  (email is the login identity, so it's kept aligned too). */
+export async function updateAuthContact(
+  currentEmail: string,
+  input: { fullName: string | null; phone: string | null; email: string }
+): Promise<void> {
+  const row = await findAuth(currentEmail);
+  if (!row) return;
+  await applyEdits(config.layers.customerAuth, {
+    updates: [
+      {
+        attributes: {
+          objectid: row.objectid,
+          full_name: input.fullName,
+          phone: input.phone,
+          email: input.email.toLowerCase(),
+        },
+      },
+    ],
+  });
+}
+
+/** Delete the login(s) for an email (admin token). Used when a customer is
+ *  removed in the operations console so their portal access is revoked too. */
+export async function deleteAuthByEmail(email: string): Promise<void> {
+  const rows = await queryLayer<{ objectid: number }>(config.layers.customerAuth, {
+    where: `LOWER(email)='${sqlEscape(email.toLowerCase())}'`,
+    outFields: "objectid",
+  });
+  if (!rows.length) return;
+  await applyEdits(config.layers.customerAuth, { deletes: rows.map((r) => r.objectid) });
 }
 
 export async function findAuth(email: string): Promise<AuthRow | null> {
   const rows = await queryLayer<AuthRow>(config.layers.customerAuth, {
     where: `LOWER(email)='${sqlEscape(email.toLowerCase())}'`,
-    outFields: "objectid,email,pwd_hash,full_name,phone,status",
+    outFields: "objectid,email,pwd_hash,full_name,phone,status,must_reset",
   });
   return rows[0] || null;
+}
+
+/**
+ * A random, unambiguous temporary password (default 8 chars). Used when the
+ * operations console provisions a login — the customer must reset it on first
+ * sign-in. The charset omits easily-confused glyphs (0/O, 1/l/I).
+ */
+export function generateTempPassword(length = 8): string {
+  const charset = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = randomBytes(length);
+  let out = "";
+  for (let i = 0; i < length; i++) out += charset[bytes[i] % charset.length];
+  return out;
 }
 
 /** A customer may only register if the water utility already knows their email. */
@@ -61,9 +112,12 @@ export async function createAuth(input: {
   password: string;
   fullName: string | null;
   phone: string | null;
+  /** When true, the customer must change this password on first sign-in. */
+  mustReset?: boolean;
 }): Promise<AuthRow> {
   const pwd_hash = await bcrypt.hash(input.password, config.bcryptRounds);
   const now = Date.now();
+  const must_reset = input.mustReset ? 1 : 0;
   const attributes = {
     email: input.email.toLowerCase(),
     pwd_hash,
@@ -72,9 +126,10 @@ export async function createAuth(input: {
     status: "Active",
     created_ts: now,
     last_login: now,
+    must_reset,
   };
   const objectid = await insertOne(config.layers.customerAuth, attributes);
-  return { objectid, email: attributes.email, pwd_hash, full_name: input.fullName, phone: input.phone, status: "Active" };
+  return { objectid, email: attributes.email, pwd_hash, full_name: input.fullName, phone: input.phone, status: "Active", must_reset };
 }
 
 export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
@@ -101,11 +156,12 @@ export async function updateProfile(
   });
 }
 
-/** Replace the customer's password hash. Caller must verify the current password first. */
+/** Replace the customer's password hash and clear any pending reset requirement.
+ *  Caller must authenticate the customer first (current password or a valid session). */
 export async function updatePassword(objectid: number, newPassword: string): Promise<void> {
   const pwd_hash = await bcrypt.hash(newPassword, config.bcryptRounds);
   await applyEdits(config.layers.customerAuth, {
-    updates: [{ attributes: { objectid, pwd_hash } }],
+    updates: [{ attributes: { objectid, pwd_hash, must_reset: 0 } }],
   });
 }
 

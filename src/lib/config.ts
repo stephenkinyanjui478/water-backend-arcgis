@@ -27,7 +27,7 @@ export const config = {
     incidences: `${HOSTED}/Water_Incidences/FeatureServer/0`,
     incidenceTypes: `${HOSTED}/Water_IncidenceTypes/FeatureServer/0`,
     fieldWorkers: `${HOSTED}/Water_FieldWorkers/FeatureServer/0`,
-    serviceConnections: `${HOSTED}/WSP_UtilityNetwork/FeatureServer/1`,
+    serviceConnections: `${HOSTED}/WSP_UtilityNetwork_UTM/FeatureServer/1`,
     // Additional hosted layers/tables the operations console reads + edits.
     billingCycles: `${HOSTED}/Water_Billing_Cycles/FeatureServer/0`,
     tariffs: `${HOSTED}/Water_Tariffs/FeatureServer/0`,
@@ -36,13 +36,30 @@ export const config = {
     orgMembers: `${HOSTED}/Water_OrgMembers/FeatureServer/0`,
     maintenanceWorkOrders: `${HOSTED}/Water_MaintenanceWorkOrders/FeatureServer/0`,
     meterReadWorkOrders: `${HOSTED}/Water_MeterReadWorkOrders/FeatureServer/0`,
+    // Zones — layer 13 of the reprojected utility-network service (UTM 37S /
+    // EPSG:32737), so SHAPE__Area is metric (m² → km²). Single source of truth
+    // with the Utility Network map now that the whole service is projected.
+    zones: `${HOSTED}/WSP_UtilityNetwork_UTM/FeatureServer/13`,
+    zoneSupply: `${HOSTED}/Water_ZoneSupply/FeatureServer/0`,
     // PRIVATE tables — owner-only, backend admin-token access exclusively.
     customerAuth: process.env.CUSTOMER_AUTH_URL || `${HOSTED}/Water_CustomerAuth/FeatureServer/0`,
     mpesaTxn: process.env.MPESA_TXN_URL || `${HOSTED}/Water_MpesaTransactions/FeatureServer/0`,
-    // PRIVATE single-row table holding the SECRET communication credentials
-    // (SMS/Email/M-Pesa) managed from the admin client's Organization page.
-    orgSettingsSecure: process.env.ORG_SETTINGS_SECURE_URL || `${HOSTED}/Water_OrgSettings_Secure/FeatureServer/0`,
+    // PRIVATE single-row table holding ALL organization details — profile, support
+    // contacts, M-Pesa / SMS / Email settings (incl. SECRETS) and notification
+    // settings — managed from the operations console Organization page. Owner-only;
+    // the backend reads/writes it with the admin token and masks secrets. This
+    // consolidates the retired Water_OrgSettings (+ _Secure) pair into one table.
+    organization: process.env.ORGANIZATION_URL || `${HOSTED}/Water_Organization/FeatureServer/0`,
   },
+
+  /** Public URL of the customer self-service portal (customers-app). Used in the
+   *  welcome email's sign-in link; falls back to the first allowed origin. */
+  customerPortalUrl: (
+    process.env.CUSTOMER_PORTAL_URL ||
+    (process.env.ALLOWED_ORIGIN || "http://localhost:3000").split(",")[0]
+  )
+    .trim()
+    .replace(/\/+$/, ""),
 
   /** Admin console (the static WSP client) sign-in. */
   admin: {
@@ -61,11 +78,7 @@ export const config = {
     clientSecret: process.env.OPS_OAUTH_CLIENT_SECRET || process.env.ARCGIS_CLIENT_SECRET || "",
     redirectUri: process.env.OPS_OAUTH_REDIRECT_URI || "http://localhost:4000/api/ops/oauth/callback",
     consoleUrl: (process.env.OPS_CONSOLE_URL || "http://localhost:3100").replace(/\/+$/, ""),
-    // Entry gate: only portal members of this group may sign in. Prefer the
-    // stable group id; the title is a convenience fallback. If both are empty,
-    // any authenticated portal user is allowed (see isOpsMember).
-    requiredGroupId: process.env.OPS_REQUIRED_GROUP_ID || "",
-    requiredGroup: process.env.OPS_REQUIRED_GROUP || "",
+    // No entry gate: any authenticated portal member may sign in.
   },
 
   jwt: {

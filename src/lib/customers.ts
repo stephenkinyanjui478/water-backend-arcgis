@@ -26,7 +26,6 @@ export interface Meter {
   latestReading: number | null;
   prevReading: number | null;
   connectionDate: number | null;
-  accountNo: string | null;
   accountBalance: number | null;
 }
 
@@ -76,10 +75,10 @@ export async function getCustomerMeters(email: string): Promise<Meter[]> {
   });
   for (const c of conns) connsByMeter.set(c.meter_no, c);
 
-  // Account-level record (account_no, balance) keyed by this email.
+  // Account-level record (name, balance) keyed by this email.
   const custRows = await queryLayer<any>(config.layers.customers, {
     where: `LOWER(email)='${sqlEscape(email.toLowerCase())}'`,
-    outFields: "account_no,cust_name,balance",
+    outFields: "cust_name,balance",
   });
   const account = custRows[0] || null;
 
@@ -96,7 +95,6 @@ export async function getCustomerMeters(email: string): Promise<Meter[]> {
       latestReading: c.latest_reading ?? null,
       prevReading: c.prev_reading ?? null,
       connectionDate: c.connection_date ?? null,
-      accountNo: account?.account_no ?? null,
       accountBalance: account?.balance ?? null,
     };
   });

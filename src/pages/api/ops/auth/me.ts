@@ -4,7 +4,7 @@ import { hasOpsSession } from "@/lib/ops-sessions";
 
 /** Return the signed-in operator's identity (gates the console UI). A valid cookie
  *  whose server-side session is gone (e.g. after a backend restart) is treated as
- *  signed-out, so the console cleanly bounces to /login. */
+ *  signed-out (401), so the console cleanly redirects to the portal sign-in. */
 export default withApi(async (req: NextApiRequest, res: NextApiResponse) => {
   requireMethod(req, "GET");
   const claims = requireOps(req);

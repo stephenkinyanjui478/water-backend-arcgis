@@ -23,23 +23,53 @@ export class ArcgisError extends Error {
   }
 }
 
-async function postForm(url: string, params: Record<string, string>): Promise<any> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: config.arcgis.referer },
-    body: new URLSearchParams(params),
-  });
-  const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`Non-JSON from ${url} (HTTP ${res.status}): ${text.slice(0, 300)}`);
+/**
+ * Retry a fetch-based call on a transient *connection* failure only. On a
+ * long-running server, undici pools keep-alive sockets; ArcGIS Enterprise (IIS)
+ * drops idle ones, so the next reused socket can fail pre-send with a bare
+ * `TypeError: fetch failed`. Those are safe to retry. A response we actually
+ * received — an ArcGIS logical error (ArcgisError) or a non-JSON body — is thrown
+ * from inside `fn` as a non-TypeError and must never be retried.
+ */
+async function withNetRetry<T>(fn: () => Promise<T>, attempts: number): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e; // real response/logic error — don't retry
+      lastErr = e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+    }
   }
-  if (json && json.error) {
-    throw new ArcgisError(`ArcGIS error from ${url}: ${JSON.stringify(json.error)}`, Number(json.error.code) || undefined);
-  }
-  return json;
+  const cause = (lastErr as any)?.cause;
+  throw new Error(`Network error reaching ArcGIS: ${cause?.code || cause?.message || (lastErr as Error)?.message}`);
+}
+
+/**
+ * POST form-encoded params to an ArcGIS endpoint and return the parsed JSON.
+ * `attempts` bounds the connection-failure retries (see withNetRetry); pass 1 for
+ * non-idempotent writes (inserts) where a retry could duplicate a record.
+ */
+async function postForm(url: string, params: Record<string, string>, attempts = 3): Promise<any> {
+  return withNetRetry(async () => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: config.arcgis.referer },
+      body: new URLSearchParams(params),
+    });
+    const text = await res.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`Non-JSON from ${url} (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    }
+    if (json && json.error) {
+      throw new ArcgisError(`ArcGIS error from ${url}: ${JSON.stringify(json.error)}`, Number(json.error.code) || undefined);
+    }
+    return json;
+  }, attempts);
 }
 
 /** Get a valid admin token, refreshing ~5 min before it expires. */
@@ -66,6 +96,7 @@ export interface QueryOptions {
   orderByFields?: string;
   returnGeometry?: boolean;
   resultRecordCount?: number;
+  resultOffset?: number;
   groupByFieldsForStatistics?: string;
   outStatistics?: unknown;
 }
@@ -90,6 +121,7 @@ export async function queryLayer<T = Record<string, any>>(
   };
   if (opts.orderByFields) params.orderByFields = opts.orderByFields;
   if (opts.resultRecordCount) params.resultRecordCount = String(opts.resultRecordCount);
+  if (opts.resultOffset != null) params.resultOffset = String(opts.resultOffset);
   if (opts.groupByFieldsForStatistics) params.groupByFieldsForStatistics = opts.groupByFieldsForStatistics;
   if (opts.outStatistics) params.outStatistics = JSON.stringify(opts.outStatistics);
   const json = await postForm(`${layerUrl}/query`, params);
@@ -130,7 +162,10 @@ export async function applyEdits(
   if (edits.adds) params.adds = JSON.stringify(edits.adds);
   if (edits.updates) params.updates = JSON.stringify(edits.updates);
   if (edits.deletes) params.deletes = JSON.stringify(edits.deletes);
-  const json = await postForm(`${layerUrl}/applyEdits`, params);
+  // Updates/deletes are idempotent (keyed by OBJECTID) so may retry a dropped
+  // socket; an insert must not, since a pre-send retry could duplicate the row.
+  const attempts = edits.adds?.length ? 1 : 3;
+  const json = await postForm(`${layerUrl}/applyEdits`, params, attempts);
 
   // Surface per-feature failures that applyEdits reports without a top-level error.
   const fail = [...(json.addResults || []), ...(json.updateResults || []), ...(json.deleteResults || [])].find(
@@ -181,6 +216,35 @@ export async function listAttachments(layerUrl: string, oid: number): Promise<At
     contentType: a.contentType,
     size: a.size,
   }));
+}
+
+/**
+ * Attachment metadata for many features in one call, keyed by parent OBJECTID.
+ * Pass `oids` to scope the query, or omit it to list every attachment on the
+ * layer (used to flag which rows have a document). Features with no attachment
+ * are simply absent from the returned map.
+ */
+export async function queryAttachments(
+  layerUrl: string,
+  oids?: number[]
+): Promise<Record<number, AttachmentInfo[]>> {
+  if (oids && !oids.length) return {};
+  const token = await getAdminToken();
+  const json = await postForm(`${layerUrl}/queryAttachments`, {
+    f: "json",
+    token,
+    ...(oids ? { objectIds: oids.join(",") } : { definitionExpression: "1=1" }),
+  });
+  const out: Record<number, AttachmentInfo[]> = {};
+  for (const g of json.attachmentGroups || []) {
+    out[g.parentObjectId] = (g.attachmentInfos || []).map((a: any) => ({
+      id: a.id,
+      name: a.name,
+      contentType: a.contentType,
+      size: a.size,
+    }));
+  }
+  return out;
 }
 
 /** Attach a binary file to a feature. Returns the new attachment id. */
